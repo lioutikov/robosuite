@@ -454,7 +454,7 @@ class UniformRandomBinsSampler(ObjectPositionSampler):
         quat_arr = {}
         placed_objects = {}
         index = 0
-        for obj_mjcf in self.mujoco_objects:
+        for key, obj_mjcf in self.mujoco_objects.items():
             horizontal_radius = obj_mjcf.get_horizontal_radius()
             bottom_offset = obj_mjcf.get_bottom_offset()
             success = False
