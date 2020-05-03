@@ -6,6 +6,9 @@ from .placement_sampler import (
     UniformRandomPegsSampler,
     RoundRobinSampler,
     RoundRobinPegsSampler,
+    UniformRandomBinsSampler,
+    RoundRobinSampler,
+    RoundRobinBinsSampler,
     SequentialCompositeSampler,
 )
 

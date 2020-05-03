@@ -3,7 +3,8 @@ import random
 import numpy as np
 
 import robosuite.utils.transform_utils as T
-from robosuite.utils.mjcf_utils import string_to_array
+from robosuite.utils.mjcf_utils import string_to_array, range_to_uniform_grid
+
 from robosuite.environments.sawyer import SawyerEnv
 
 from robosuite.models.arenas import BinsArena
@@ -20,7 +21,7 @@ from robosuite.models.objects import (
     CanVisualObject,
 )
 from robosuite.models.robots import Sawyer
-from robosuite.models.tasks import PickPlaceTask, UniformRandomSampler
+from robosuite.models.tasks import PickPlaceTask, UniformRandomBinsSampler, RoundRobinBinsSampler
 from robosuite.controllers import load_controller_config
 import os
 
@@ -172,6 +173,17 @@ class SawyerPickPlace(SawyerEnv):
         # whether to use ground-truth object states
         self.use_object_obs = use_object_obs
 
+        # object placement initializer
+        if placement_initializer is not None:
+            self.placement_initializer = placement_initializer
+        else:
+            self.placement_initializer = UniformRandomBinsSampler(
+                x_range=[-0.145, 0.145],
+                y_range=[-0.195, 0.195],
+                ensure_object_boundary_in_range=True,
+                z_rotation=None,
+            )
+
         super().__init__(
             controller_config=controller_config,
             gripper_type=gripper_type,
@@ -213,6 +225,66 @@ class SawyerPickPlace(SawyerEnv):
         self.collision_check_geom_ids = [
             self.sim.model._geom_name2id[k] for k in self.collision_check_geom_names
         ]
+
+    def _get_placement_initializer_for_eval_mode(self):
+        """
+        Sets a placement initializer that is used to initialize the
+        environment into a fixed set of known task instances.
+        This is for reproducibility in policy evaluation.
+        """
+
+        assert(self.eval_mode)
+
+        # set up placement grid by getting bounds per dimension and then
+        # using meshgrid to get all combinations
+        x_bounds, y_bounds, z_rot_bounds, object_name = self._grid_bounds_for_eval_mode()
+        x_grid = range_to_uniform_grid(a=x_bounds[0], b=x_bounds[1], n=x_bounds[2])
+        y_grid = range_to_uniform_grid(a=y_bounds[0], b=y_bounds[1], n=y_bounds[2])
+        z_rotation = range_to_uniform_grid(a=z_rot_bounds[0], b=z_rot_bounds[1], n=z_rot_bounds[2])
+        grid = np.meshgrid(x_grid, y_grid, z_rotation)
+        x_grid = grid[0].ravel()
+        y_grid = grid[1].ravel()
+        z_rotation = grid[2].ravel()
+        grid_length = x_grid.shape[0]
+
+        round_robin_period = grid_length
+        if self.perturb_evals:
+            # sample 100 rounds of perturbations and then sampler will repeat
+            round_robin_period *= 100
+
+            # perturbation size should be half the grid spacing
+            x_pos_perturb_size = ((x_bounds[1] - x_bounds[0]) / x_bounds[2]) / 2.
+            y_pos_perturb_size = ((y_bounds[1] - y_bounds[0]) / y_bounds[2]) / 2.
+            z_rot_perturb_size = ((z_rot_bounds[1] - z_rot_bounds[0]) / z_rot_bounds[2]) / 2.
+
+        # assign grid locations for the full round robin schedule
+        final_x_grid = np.zeros(round_robin_period)
+        final_y_grid = np.zeros(round_robin_period)
+        final_z_grid = np.zeros(round_robin_period)
+        for t in range(round_robin_period):
+            g_ind = t % grid_length
+            x, y, z = x_grid[g_ind], y_grid[g_ind], z_rotation[g_ind]
+            if self.perturb_evals:
+                x += np.random.uniform(low=-x_pos_perturb_size, high=x_pos_perturb_size)
+                y += np.random.uniform(low=-y_pos_perturb_size, high=y_pos_perturb_size)
+                z += np.random.uniform(low=-z_rot_perturb_size, high=z_rot_perturb_size)
+            final_x_grid[t], final_y_grid[t], final_z_grid[t] = x, y, z
+
+        self.placement_initializer = RoundRobinBinsSampler(
+            x_range=final_x_grid,
+            y_range=final_y_grid,
+            ensure_object_boundary_in_range=False,
+            z_rotation=final_z_grid,
+            object_name=object_name,
+        )
+
+    def _grid_bounds_for_eval_mode(self):
+        """
+        Helper function to get grid bounds of x positions, y positions,
+        and z-rotations for reproducible evaluations, and number of points
+        per dimension.
+        """
+        raise Exception("Not implemented.")
 
     def _load_model(self):
         """
@@ -261,6 +333,7 @@ class SawyerPickPlace(SawyerEnv):
             self.mujoco_robot,
             self.mujoco_objects,
             self.visual_objects,
+            initializer=self.placement_initializer
         )
         self.model.place_objects()
         self.model.place_visual()
@@ -618,6 +691,20 @@ class SawyerPickPlaceMilk(SawyerPickPlace):
         ), "invalid set of arguments"
         super().__init__(single_object_mode=2, object_type="milk", **kwargs)
 
+    def _grid_bounds_for_eval_mode(self):
+        """
+        Helper function to get grid bounds of x positions, y positions,
+        and z-rotations for reproducible evaluations, and number of points
+        per dimension.
+        """
+
+        # (low, high, number of grid points for this dimension)
+        x_bounds = (-0.12, 0.12, 4)
+        y_bounds = (-0.17, 0.17, 4)
+        z_rot_bounds = (0., 2. * np.pi, 2)
+        name = "milk"
+        return x_bounds, y_bounds, z_rot_bounds, name
+
 
 class SawyerPickPlaceBread(SawyerPickPlace):
     """
@@ -629,6 +716,20 @@ class SawyerPickPlaceBread(SawyerPickPlace):
             "single_object_mode" not in kwargs and "object_type" not in kwargs
         ), "invalid set of arguments"
         super().__init__(single_object_mode=2, object_type="bread", **kwargs)
+
+    def _grid_bounds_for_eval_mode(self):
+        """
+        Helper function to get grid bounds of x positions, y positions,
+        and z-rotations for reproducible evaluations, and number of points
+        per dimension.
+        """
+
+        # (low, high, number of grid points for this dimension)
+        x_bounds = (-0.115, 0.115, 4)
+        y_bounds = (-0.165, 0.165, 4)
+        z_rot_bounds = (0., 2. * np.pi, 2)
+        name = "bread"
+        return x_bounds, y_bounds, z_rot_bounds, name
 
 
 class SawyerPickPlaceCereal(SawyerPickPlace):
@@ -642,6 +743,20 @@ class SawyerPickPlaceCereal(SawyerPickPlace):
         ), "invalid set of arguments"
         super().__init__(single_object_mode=2, object_type="cereal", **kwargs)
 
+    def _grid_bounds_for_eval_mode(self):
+        """
+        Helper function to get grid bounds of x positions, y positions,
+        and z-rotations for reproducible evaluations, and number of points
+        per dimension.
+        """
+
+        # (low, high, number of grid points for this dimension)
+        x_bounds = (-0.125, 0.125, 4)
+        y_bounds = (-0.175, 0.175, 4)
+        z_rot_bounds = (0., 2. * np.pi, 2)
+        name = "cereal"
+        return x_bounds, y_bounds, z_rot_bounds, name
+
 
 class SawyerPickPlaceCan(SawyerPickPlace):
     """
@@ -653,3 +768,17 @@ class SawyerPickPlaceCan(SawyerPickPlace):
             "single_object_mode" not in kwargs and "object_type" not in kwargs
         ), "invalid set of arguments"
         super().__init__(single_object_mode=2, object_type="can", **kwargs)
+
+    def _grid_bounds_for_eval_mode(self):
+        """
+        Helper function to get grid bounds of x positions, y positions,
+        and z-rotations for reproducible evaluations, and number of points
+        per dimension.
+        """
+
+        # (low, high, number of grid points for this dimension)
+        x_bounds = (-0.12, 0.12, 4)
+        y_bounds = (-0.17, 0.17, 4)
+        z_rot_bounds = (0., 2. * np.pi, 2)
+        name = "can"
+        return x_bounds, y_bounds, z_rot_bounds, name
