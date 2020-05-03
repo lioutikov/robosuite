@@ -173,6 +173,8 @@ class SawyerPickPlace(SawyerEnv):
         # whether to use ground-truth object states
         self.use_object_obs = use_object_obs
 
+        self.last_action = None
+
         # object placement initializer
         if placement_initializer is not None:
             self.placement_initializer = placement_initializer

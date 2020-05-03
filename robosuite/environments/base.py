@@ -205,7 +205,7 @@ class MujocoEnv(metaclass=EnvMeta):
 
             # make sure mujoco-py doesn't block rendering frames.
             # (see https://github.com/StanfordVL/robosuite/issues/39)
-            self.viewer.viewer._render_every_frame = True
+            # self.viewer.viewer._render_every_frame = True
 
         elif self.has_offscreen_renderer:
             if self.sim._render_context_offscreen is None:

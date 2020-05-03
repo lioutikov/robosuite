@@ -288,6 +288,7 @@ class SawyerEnv(MujocoEnv):
                 actuation controls for the gripper.
             policy_step (bool): Whether a new policy step (action) is being taken
         """
+        self.last_action = action
 
         # clip actions into valid range
         assert len(action) == self.controller.control_dim + self.gripper.dof, \
